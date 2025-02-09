@@ -1,0 +1,12 @@
+pyaudio # 依赖于portaudio， 需要先安装brew install portaudio
+python-dotenv
+deepgram-sdk==3.*
+
+langchain
+langchain-ollama
+langchain-openai
+langchain-groq
+
+asyncio
+
+streamlit
