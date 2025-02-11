@@ -3,6 +3,7 @@ python-dotenv
 deepgram-sdk==3.*
 
 langchain
+langchain-community
 langchain-ollama
 langchain-openai
 langchain-groq
@@ -10,3 +11,7 @@ langchain-groq
 asyncio
 
 streamlit
+
+beautifulsoup4
+sentence_transformers
+faiss-cpu
