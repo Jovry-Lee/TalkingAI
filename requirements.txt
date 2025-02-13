@@ -15,3 +15,5 @@ streamlit
 beautifulsoup4
 sentence_transformers
 faiss-cpu
+langchain-huggingface
+langchainhub
