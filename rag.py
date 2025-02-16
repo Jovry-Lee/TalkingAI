@@ -54,6 +54,7 @@ combine_docs_chain.invoke({
     "context": docs
 })
 
+# 定义检索器
 retriever = FAISS.load_local(
     "vector_db", 
     embeddings_model,
@@ -65,4 +66,4 @@ response = retriever_chian.invoke({
     "input": query
 })
 
-print(response)
+print(response["answer"])

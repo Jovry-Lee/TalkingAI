@@ -19,6 +19,15 @@ from deepgram import (
     LiveTranscriptionEvents,
     Microphone
 )
+from langchain_community.document_loaders import WebBaseLoader #文档加载器的一种，用于加载网页内容
+from langchain.text_splitter import RecursiveCharacterTextSplitter # 用于文档分割
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS # 向量数据库，用于存储向量数据
+
+from langchain import hub
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+
 
 load_dotenv()
 
@@ -105,9 +114,7 @@ class TextToSpeech:
         player_process.wait() # 保证主程序等待，直到播放完成
 
 
-
 tts = TextToSpeech()
-
 
 merge_transcript = Merge_Transcript()
 
@@ -176,17 +183,74 @@ async def get_transcript(callback):
         print(f"Could not open web socket: {error}")
         return
 
+class GetWebData:
+    def __init__(self):
+        self.embeddings_model = None
+        self.vectorDB = None
+        self.llm = ChatGroq(
+            temperature=0.8,
+            model="llama3-70b-8192",
+            groq_api_key = os.getenv("GROQ_API_KEY")
+        )
+
+    def get_url_vectordb(self, url):
+        loader = WebBaseLoader(url)
+        document = loader.load()
+        # st.write(document)
+
+        # 文档分割
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000, # 分块大小
+            chunk_overlap=200, # 允许分块间有重叠
+            length_function=len, # 使用len方法进行分割
+            separators=["\n\n", "\n", " ", ""] # 分割标志符,分割的位置
+        ) # 文档分割器
+        docs = text_splitter.split_documents(document)
+        # st.write(docs)
+
+        # 将分块数据从文字转换为embedding格式。
+        self.embeddings_model = HuggingFaceEmbeddings(
+            model_name="all-MiniLM-L6-v2" # https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+        )
+        # 将分块转换为向量数据库可以辨认的数据
+        self.vectorDB = FAISS.from_documents(docs, self.embeddings_model)
+        self.vectorDB.save_local("faiss_db")
+        return self.vectorDB
+
+    def retrieval_generator(self, query, vectorDB):
+        # 初始化检索器
+        retriever = vectorDB.as_retriever(
+            search_type="similarity", # 搜索类型，相似度搜索
+            search_kwargs={"k": 3} # 搜索时返回多少个最相似的内容
+        )
+
+        prompt = hub.pull("rlm/rag-prompt")
+        rag_chain = (
+            {
+                "context": retriever | (lambda docs: "\n\n".join(doc.page_content for doc in docs)), # 提取每一个docs的page content，使用双换行连接起来
+                "question": RunnablePassthrough()
+            }
+            | prompt 
+            | self.llm 
+            | StrOutputParser()
+        )
+        response = rag_chain.invoke(query)
+        # st.write(response)
+        return response
+
+        
+        # retriever_docs = retriever.invoke(query)
+        # st.write(retriever_docs)
+
 class AiManager:
     def __init__(self):
         self.transcription_response = ""
-        self.llm = ModelProcessor()   
+        self.llm = ModelProcessor()  
+        self.getwebdata = GetWebData()
     
 
     # 异步处理：语音转文字, llm处理，然后文字转语音，整个过程比较耗时。
-    async def start(self):
-        st.title("聊天💬机器人🤖")
-        st.subheader("你可以向我提问,我会尽量回答你!")
-
+    async def start(self, vectorDB):
         def handle_full_sentence(full_sentence):
             self.transcription_response = full_sentence
 
@@ -210,7 +274,8 @@ class AiManager:
                 # print(llm_response.content)
                 with answer_box.container():
                     st.write_stream(
-                        stream_data(llm_response.content)
+                        # stream_data(llm_response.content)
+                        stream_data(llm_response)
                     )
                 tts.speak(llm_response.content)
 
@@ -220,11 +285,15 @@ class AiManager:
                 st.write_stream(
                     stream_data(self.transcription_response)
                 )
-            llm_response = self.llm.process(self.transcription_response)
+            # llm_response = self.llm.process(self.transcription_response)
+            llm_response = self.getwebdata.retrieval_generator(self.transcription_response, vectorDB)
+
             # print(llm_response.content)
             with answer_box.container():
                 st.write_stream(
-                    stream_data(llm_response.content)
+                    # stream_data(llm_response.content)
+                    stream_data(llm_response)
+
                 )
 
             tts.speak(llm_response.content)
@@ -233,4 +302,24 @@ class AiManager:
 
 if __name__ == "__main__":
     manager = AiManager()
-    asyncio.run(manager.start())
+    getWebData = GetWebData()
+
+    # streamlit的一个特性，当修改或输入了一个内容，网页元素会全部刷新一次。
+    # 现在希望通过用户提交，再进行后续操作。
+    st.title("聊天💬机器人🤖")
+    st.subheader("你可以向我提问,我会尽量回答你!")
+
+    with st.sidebar:
+        st.header("设定：")
+        website_url =st.text_input(
+            label="网址",
+            placeholder="请输入想要搜索的网址"
+        )
+    
+    if website_url is None or website_url == "":
+        st.info("请输入您想语音回答问题的网址.")
+    else:
+        st.info(f"现在语音AI已经可以根据{website_url}回答您的提问🙋")
+        vectorDB = getWebData.get_url_vectordb(website_url)
+        # getWebData.retrieval_generator("What is langchain?") # For Test
+        asyncio.run(manager.start(vectorDB))
